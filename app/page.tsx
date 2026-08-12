@@ -1,6 +1,7 @@
 'use client'
 
 import { TranscriptPanel } from '@/components/transcript-panel'
+import Link from 'next/link'
 import { useRef, useState } from 'react'
 import { RealtimeSession } from 'speechmatics'
 
@@ -95,6 +96,9 @@ export default function Home() {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-between">
+      <Link href="/parking" className="text-sm text-blue-600 underline">
+        Find nearby parking →
+      </Link>
       <button onClick={listDevices}>Select device</button>
       <button onClick={startTranscript}>START</button>
       <button onClick={stopTranscript}>STOP</button>

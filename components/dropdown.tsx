@@ -61,7 +61,7 @@ export function Dropdown() {
   )
 }
 
-function MicIcon(props) {
+function MicIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg
       {...props}
