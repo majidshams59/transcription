@@ -128,6 +128,11 @@ export default function ParkingFinderPage() {
     if (!centre) return
     if (lastNamed.current && distanceKm(lastNamed.current, centre) < 0.15) return
 
+    // Drop the old name straight away: keeping it while the map has moved
+    // elsewhere is worse than showing coordinates.
+    setPlaceName(null)
+    lastNamed.current = null
+
     const controller = new AbortController()
     const timer = setTimeout(async () => {
       try {
@@ -319,8 +324,11 @@ export default function ParkingFinderPage() {
 
       <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 py-2 text-sm">
         <span aria-hidden>📍</span>
+        {/* Falls back to coordinates so the label still tracks the map when
+            reverse geocoding is unavailable — otherwise a blocked lookup makes
+            a working map look frozen. */}
         <span className="truncate font-medium text-gray-900">
-          {placeName ?? 'Searching this area'}
+          {placeName ?? `${centre.lat.toFixed(4)}, ${centre.lng.toFixed(4)}`}
         </span>
         <span className="ml-auto whitespace-nowrap text-xs text-gray-500">
           {zoomedOutTooFar ? '—' : `${filteredSpots.length} nearby`}
