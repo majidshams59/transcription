@@ -97,36 +97,63 @@ export interface Bounds {
  * point you happened to search. Each cell's contents are derived from its own
  * coordinates, so a given spot stays put as you pan — panning reveals new cells
  * instead of reshuffling everything, the way a real bbox-backed API behaves.
+ *
+ * The grid is multi-resolution, like map tiles: each level halves the cell size
+ * and is seeded independently, and a view shows every level up to the one that
+ * suits its size. Zooming in therefore *adds* detail (the individual bays on a
+ * street) while keeping the coarse spots (car parks) already on screen. A single
+ * fixed cell size can't do both: sized for a city view it leaves street-level
+ * zoom empty, and sized for a street it buries the city view in markers.
  */
-const CELL_DEG = 0.008 // ~890m of latitude
-const MAX_CELLS = 400
+const BASE_CELL_DEG = 0.008 // ~890m of latitude at level 0
+const MAX_LEVEL = 8
+const TARGET_FINEST_CELLS = 15 // cells of the finest level across the viewport
+const MAX_SPOTS = 90
+const MAX_LEVEL0_CELLS = 150
 
-function cellSeed(cx: number, cy: number): number {
+function cellDeg(level: number): number {
+  return BASE_CELL_DEG / 2 ** level
+}
+
+/** Finest grid level worth drawing for a viewport of this size. */
+function detailLevel(bounds: Bounds): number {
+  const spanLat = Math.max(bounds.north - bounds.south, 1e-9)
+  const spanLng = Math.max(bounds.east - bounds.west, 1e-9)
+  const wanted = Math.sqrt((spanLat * spanLng) / TARGET_FINEST_CELLS)
+  const level = Math.round(Math.log2(BASE_CELL_DEG / wanted))
+  return Math.min(MAX_LEVEL, Math.max(0, level))
+}
+
+function cellSeed(level: number, cx: number, cy: number): number {
   let h = 2166136261
-  h ^= cx
-  h = Math.imul(h, 16777619)
-  h ^= cy
-  h = Math.imul(h, 16777619)
+  for (const v of [level, cx, cy]) {
+    h ^= v
+    h = Math.imul(h, 16777619)
+  }
   return h
 }
 
 type SpotSeed = Omit<ParkingSpot, 'distanceKm'>
 
-function spotsForCell(cx: number, cy: number): SpotSeed[] {
-  const rand = mulberry32(cellSeed(cx, cy))
-  const count = 1 + Math.floor(rand() * 2)
+function spotsForCell(level: number, cx: number, cy: number): SpotSeed[] {
+  const rand = mulberry32(cellSeed(level, cx, cy))
+  const size = cellDeg(level)
+  // Finer levels are sparser per cell; there are four times as many of them.
+  const count = level === 0 ? 1 + Math.floor(rand() * 2) : rand() < 0.55 ? 1 : 0
   const spots: SpotSeed[] = []
 
   for (let i = 0; i < count; i++) {
     const position: LatLng = {
-      lat: (cy + rand()) * CELL_DEG,
-      lng: (cx + rand()) * CELL_DEG,
+      lat: (cy + rand()) * size,
+      lng: (cx + rand()) * size,
     }
 
-    const type = pick<ParkingType>(
-      rand,
-      ['on-street', 'car-park', 'garage', 'private'] as ParkingType[]
-    )
+    // Coarse cells carry the landmarks you'd pick out from a city view; the
+    // finer levels that appear as you zoom in are mostly individual bays.
+    const type =
+      level === 0
+        ? pick<ParkingType>(rand, ['car-park', 'garage', 'car-park', 'private'])
+        : pick<ParkingType>(rand, ['on-street', 'on-street', 'on-street', 'private'])
 
     const basePrice =
       type === 'on-street'
@@ -157,7 +184,7 @@ function spotsForCell(cx: number, cy: number): SpotSeed[] {
             : `${pick(rand, OPERATORS)} - ${place}`
 
     spots.push({
-      id: `spot-${cx}-${cy}-${i}`,
+      id: `spot-${level}-${cx}-${cy}-${i}`,
       name,
       operator: pick(rand, OPERATORS),
       type,
@@ -177,24 +204,26 @@ function spotsForCell(cx: number, cy: number): SpotSeed[] {
   return spots
 }
 
-function cellRange(bounds: Bounds) {
+function cellRange(bounds: Bounds, level: number) {
+  const size = cellDeg(level)
   return {
-    x0: Math.floor(bounds.west / CELL_DEG),
-    x1: Math.floor(bounds.east / CELL_DEG),
-    y0: Math.floor(bounds.south / CELL_DEG),
-    y1: Math.floor(bounds.north / CELL_DEG),
+    x0: Math.floor(bounds.west / size),
+    x1: Math.floor(bounds.east / size),
+    y0: Math.floor(bounds.south / size),
+    y1: Math.floor(bounds.north / size),
   }
 }
 
 /** True when the viewport covers so much ground that listing spots is useless. */
 export function boundsTooWide(bounds: Bounds): boolean {
-  const { x0, x1, y0, y1 } = cellRange(bounds)
-  return (x1 - x0 + 1) * (y1 - y0 + 1) > MAX_CELLS
+  const { x0, x1, y0, y1 } = cellRange(bounds, 0)
+  return (x1 - x0 + 1) * (y1 - y0 + 1) > MAX_LEVEL0_CELLS
 }
 
 /**
- * All spots in the cells overlapping `bounds`, with distances measured from
- * `reference` (the user's location or searched address) and nearest first.
+ * Every spot in view, across all grid levels the viewport warrants, with
+ * distances measured from `reference` (the user's location or searched
+ * address) and nearest first.
  */
 export function generateSpotsInBounds(
   bounds: Bounds,
@@ -202,21 +231,33 @@ export function generateSpotsInBounds(
 ): ParkingSpot[] {
   if (boundsTooWide(bounds)) return []
 
-  const { x0, x1, y0, y1 } = cellRange(bounds)
+  const finest = detailLevel(bounds)
   const spots: ParkingSpot[] = []
 
-  for (let cy = y0; cy <= y1; cy++) {
-    for (let cx = x0; cx <= x1; cx++) {
-      for (const seed of spotsForCell(cx, cy)) {
-        spots.push({
-          ...seed,
-          distanceKm: distanceKm(reference, seed.position),
-        })
+  for (let level = 0; level <= finest; level++) {
+    const { x0, x1, y0, y1 } = cellRange(bounds, level)
+    for (let cy = y0; cy <= y1; cy++) {
+      for (let cx = x0; cx <= x1; cx++) {
+        for (const seed of spotsForCell(level, cx, cy)) {
+          spots.push({
+            ...seed,
+            distanceKm: distanceKm(reference, seed.position),
+          })
+        }
       }
     }
   }
 
-  return spots.sort((a, b) => a.distanceKm - b.distanceKm)
+  // Keep the markers nearest the middle of the view so a wide viewport stays
+  // legible, then present them nearest-first relative to the user.
+  const centre: LatLng = {
+    lat: (bounds.north + bounds.south) / 2,
+    lng: (bounds.east + bounds.west) / 2,
+  }
+  return spots
+    .sort((a, b) => distanceKm(centre, a.position) - distanceKm(centre, b.position))
+    .slice(0, MAX_SPOTS)
+    .sort((a, b) => a.distanceKm - b.distanceKm)
 }
 
 export function typeLabel(type: ParkingType): string {
