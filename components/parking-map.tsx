@@ -23,18 +23,31 @@ const AVAILABILITY_COLOR: Record<string, string> = {
   full: '#6b7280',
 }
 
+// AppyParking-style pin: a badge sitting on a stem that comes to a point.
+// The point (not the badge) is what's anchored to the spot's lat/lng, so it's
+// unambiguous which exact curb/bay the marker refers to.
 function markerIcon(color: string, active: boolean) {
-  const size = active ? 30 : 22
+  const badgeR = active ? 11 : 8
+  const stemLen = active ? 16 : 13
+  const w = badgeR * 2 + 8
+  const cx = w / 2
+  const cy = badgeR + 4
+  const tipY = cy + badgeR + stemLen
+  const h = tipY + 3
+
   return L.divIcon({
     className: '',
-    html: `<div style="
-      width:${size}px;height:${size}px;border-radius:9999px;
-      background:${color};border:2px solid white;
-      box-shadow:0 1px 4px rgba(0,0,0,0.4);
-      ${active ? 'outline:3px solid rgba(37,99,235,0.5);' : ''}
-    "></div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
+    html: `
+      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;overflow:visible;">
+        ${active ? `<circle cx="${cx}" cy="${cy}" r="${badgeR + 4}" fill="none" stroke="rgba(37,99,235,0.55)" stroke-width="3" />` : ''}
+        <line x1="${cx}" y1="${cy + badgeR - 1}" x2="${cx}" y2="${tipY}" stroke="${color}" stroke-width="2.5" stroke-linecap="round" />
+        <circle cx="${cx}" cy="${tipY}" r="2.5" fill="${color}" stroke="white" stroke-width="1" />
+        <circle cx="${cx}" cy="${cy}" r="${badgeR}" fill="${color}" stroke="white" stroke-width="2" />
+      </svg>
+    `,
+    iconSize: [w, h],
+    iconAnchor: [cx, tipY],
+    popupAnchor: [0, -tipY],
   })
 }
 
