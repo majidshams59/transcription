@@ -53,6 +53,8 @@ export default function ParkingFinderPage() {
   const [sortKey, setSortKey] = useState<SortKey>('distance')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [bounds, setBounds] = useState<Bounds | null>(null)
+  // Narrow screens can only fit one pane at a time; both show side by side at md+.
+  const [mobileView, setMobileView] = useState<'map' | 'list'>('map')
 
   // Spots come from whatever the map is currently showing, so panning to a new
   // area loads that area's parking instead of keeping the original search.
@@ -187,14 +189,19 @@ export default function ParkingFinderPage() {
   return (
     <main className="flex h-screen flex-col bg-gray-50">
       <header className="z-10 flex flex-wrap items-center gap-3 border-b border-gray-200 bg-white px-4 py-3 shadow-sm">
-        <h1 className="text-lg font-bold text-gray-900">ParkFinder</h1>
+        <h1 className="order-1 text-lg font-bold text-gray-900 md:order-none">
+          ParkFinder
+        </h1>
 
-        <form onSubmit={searchAddress} className="flex flex-1 min-w-[200px] gap-2">
+        <form
+          onSubmit={searchAddress}
+          className="order-3 flex w-full gap-2 md:order-none md:w-auto md:flex-1"
+        >
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search a new location…"
-            className="flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+            className="min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
           />
           <button
             type="submit"
@@ -208,10 +215,26 @@ export default function ParkingFinderPage() {
         <button
           onClick={useMyLocation}
           disabled={locating}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+          className="order-2 ml-auto whitespace-nowrap rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 md:order-none md:ml-0"
         >
           {locating ? 'Locating…' : '📍 My location'}
         </button>
+
+        <div className="order-4 flex w-full gap-1 rounded-lg bg-gray-100 p-1 md:hidden">
+          {(['map', 'list'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setMobileView(v)}
+              className={`flex-1 rounded-md py-1.5 text-sm font-medium capitalize ${
+                mobileView === v
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500'
+              }`}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
       </header>
 
       {error && (
@@ -219,7 +242,11 @@ export default function ParkingFinderPage() {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-full max-w-sm flex-col border-r border-gray-200 bg-white">
+        <aside
+          className={`${
+            mobileView === 'list' ? 'flex' : 'hidden'
+          } w-full flex-col border-r border-gray-200 bg-white md:flex md:max-w-sm`}
+        >
           <div className="space-y-3 border-b border-gray-200 p-4">
             <div className="flex flex-wrap gap-1.5">
               {ALL_TYPES.map((type) => (
@@ -323,7 +350,11 @@ export default function ParkingFinderPage() {
           </div>
         </aside>
 
-        <div className="relative flex-1">
+        <div
+          className={`${
+            mobileView === 'map' ? 'block' : 'hidden'
+          } relative flex-1 md:block`}
+        >
           <ParkingMap
             origin={origin}
             spots={filteredSpots}

@@ -81,6 +81,11 @@ function BoundsReporter({
   onBoundsChange: (bounds: Bounds) => void
 }) {
   const report = (map: L.Map) => {
+    // While the map is hidden behind the mobile toggle its container collapses
+    // to zero, and the bounds it reports would wipe out the visible spots.
+    const el = map.getContainer()
+    if (!el.clientWidth || !el.clientHeight) return
+
     const b = map.getBounds()
     onBoundsChange({
       north: b.getNorth(),
@@ -100,6 +105,37 @@ function BoundsReporter({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map])
 
+  return null
+}
+
+/**
+ * Leaflet measures its container on load, so a map that was hidden (as it is
+ * behind the mobile map/list toggle) comes back with a stale size until told
+ * to re-measure.
+ */
+function ResizeHandler() {
+  const map = useMap()
+  useEffect(() => {
+    const el = map.getContainer()
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth && el.clientHeight) map.invalidateSize()
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [map])
+  return null
+}
+
+/** Brings a spot into view when it's selected from the list while off-screen. */
+function PanToSelected({ spot }: { spot: ParkingSpot | null }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!spot) return
+    const pos = L.latLng(spot.position.lat, spot.position.lng)
+    if (!map.getBounds().pad(-0.15).contains(pos)) {
+      map.panTo(pos, { duration: 0.5 })
+    }
+  }, [spot, map])
   return null
 }
 
@@ -131,6 +167,8 @@ export default function ParkingMap({
       />
       <Recenter position={origin} />
       <BoundsReporter onBoundsChange={onBoundsChange} />
+      <ResizeHandler />
+      <PanToSelected spot={spots.find((s) => s.id === selectedId) ?? null} />
       <Marker position={[origin.lat, origin.lng]} icon={originIcon()}>
         <Popup>You are here</Popup>
       </Marker>
