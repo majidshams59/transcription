@@ -7,9 +7,11 @@ import type { LatLng } from '@/lib/geo'
 import { formatDistance, googleMapsDirectionsUrl, walkingMinutes } from '@/lib/geo'
 import {
   availabilityLevel,
+  boundsTooWide,
   estimateCost,
-  generateParkingSpots,
+  generateSpotsInBounds,
   typeLabel,
+  type Bounds,
   type ParkingSpot,
   type ParkingType,
 } from '@/lib/parking-data'
@@ -50,8 +52,15 @@ export default function ParkingFinderPage() {
   const [onlyAvailable, setOnlyAvailable] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('distance')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [bounds, setBounds] = useState<Bounds | null>(null)
 
-  const spots = useMemo(() => (origin ? generateParkingSpots(origin) : []), [origin])
+  // Spots come from whatever the map is currently showing, so panning to a new
+  // area loads that area's parking instead of keeping the original search.
+  const spots = useMemo(
+    () => (origin && bounds ? generateSpotsInBounds(bounds, origin) : []),
+    [origin, bounds]
+  )
+  const zoomedOutTooFar = bounds ? boundsTooWide(bounds) : false
 
   const useMyLocation = useCallback(() => {
     setError(null)
@@ -267,10 +276,16 @@ export default function ParkingFinderPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            {filteredSpots.length === 0 && (
+            {zoomedOutTooFar ? (
               <p className="p-4 text-sm text-gray-500">
-                No parking matches your filters.
+                Zoom in to see parking in this area.
               </p>
+            ) : (
+              filteredSpots.length === 0 && (
+                <p className="p-4 text-sm text-gray-500">
+                  No parking matches your filters.
+                </p>
+              )
             )}
             {filteredSpots.map((spot) => {
               const level = availabilityLevel(spot)
@@ -314,7 +329,15 @@ export default function ParkingFinderPage() {
             spots={filteredSpots}
             selectedId={selectedId}
             onSelect={setSelectedId}
+            onBoundsChange={setBounds}
           />
+          <div className="pointer-events-none absolute bottom-4 left-1/2 z-[1000] -translate-x-1/2">
+            <span className="rounded-full bg-white/95 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md">
+              {zoomedOutTooFar
+                ? 'Zoom in to see parking'
+                : `${filteredSpots.length} spaces in view`}
+            </span>
+          </div>
         </div>
       </div>
 

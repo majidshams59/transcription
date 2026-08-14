@@ -7,12 +7,14 @@ import {
   Marker,
   Popup,
   useMap,
+  useMapEvents,
 } from 'react-leaflet'
 import L from 'leaflet'
 import type { LatLng } from '@/lib/geo'
 import {
   availabilityLevel,
   typeLabel,
+  type Bounds,
   type ParkingSpot,
 } from '@/lib/parking-data'
 
@@ -72,11 +74,41 @@ function Recenter({ position }: { position: LatLng }) {
   return null
 }
 
+/** Reports the visible area on load and after every pan/zoom. */
+function BoundsReporter({
+  onBoundsChange,
+}: {
+  onBoundsChange: (bounds: Bounds) => void
+}) {
+  const report = (map: L.Map) => {
+    const b = map.getBounds()
+    onBoundsChange({
+      north: b.getNorth(),
+      south: b.getSouth(),
+      east: b.getEast(),
+      west: b.getWest(),
+    })
+  }
+
+  const map = useMapEvents({
+    moveend: () => report(map),
+    zoomend: () => report(map),
+  })
+
+  useEffect(() => {
+    report(map)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map])
+
+  return null
+}
+
 interface ParkingMapProps {
   origin: LatLng
   spots: ParkingSpot[]
   selectedId: string | null
   onSelect: (id: string) => void
+  onBoundsChange: (bounds: Bounds) => void
 }
 
 export default function ParkingMap({
@@ -84,6 +116,7 @@ export default function ParkingMap({
   spots,
   selectedId,
   onSelect,
+  onBoundsChange,
 }: ParkingMapProps) {
   return (
     <MapContainer
@@ -97,6 +130,7 @@ export default function ParkingMap({
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <Recenter position={origin} />
+      <BoundsReporter onBoundsChange={onBoundsChange} />
       <Marker position={[origin.lat, origin.lng]} icon={originIcon()}>
         <Popup>You are here</Popup>
       </Marker>

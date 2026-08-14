@@ -81,39 +81,46 @@ function mulberry32(seed: number) {
   }
 }
 
-function seedFromLatLng(pos: LatLng): number {
-  const key = `${pos.lat.toFixed(3)},${pos.lng.toFixed(3)}`
-  let hash = 0
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash << 5) - hash + key.charCodeAt(i)
-    hash |= 0
-  }
-  return hash
-}
-
 function pick<T>(rand: () => number, arr: T[]): T {
   return arr[Math.floor(rand() * arr.length)]
 }
 
-export function generateParkingSpots(
-  origin: LatLng,
-  count = 22
-): ParkingSpot[] {
-  const rand = mulberry32(seedFromLatLng(origin))
-  const spots: ParkingSpot[] = []
+export interface Bounds {
+  north: number
+  south: number
+  east: number
+  west: number
+}
+
+/**
+ * Spots live on a fixed world grid rather than being scattered around whatever
+ * point you happened to search. Each cell's contents are derived from its own
+ * coordinates, so a given spot stays put as you pan — panning reveals new cells
+ * instead of reshuffling everything, the way a real bbox-backed API behaves.
+ */
+const CELL_DEG = 0.008 // ~890m of latitude
+const MAX_CELLS = 400
+
+function cellSeed(cx: number, cy: number): number {
+  let h = 2166136261
+  h ^= cx
+  h = Math.imul(h, 16777619)
+  h ^= cy
+  h = Math.imul(h, 16777619)
+  return h
+}
+
+type SpotSeed = Omit<ParkingSpot, 'distanceKm'>
+
+function spotsForCell(cx: number, cy: number): SpotSeed[] {
+  const rand = mulberry32(cellSeed(cx, cy))
+  const count = 1 + Math.floor(rand() * 2)
+  const spots: SpotSeed[] = []
 
   for (let i = 0; i < count; i++) {
-    // Random point within roughly a 1.4km radius, biased towards closer in.
-    const radiusKm = 0.15 + rand() ** 1.6 * 1.4
-    const angle = rand() * Math.PI * 2
-    const latOffset = (radiusKm / 111) * Math.cos(angle)
-    const lngOffset =
-      (radiusKm / (111 * Math.cos((origin.lat * Math.PI) / 180))) *
-      Math.sin(angle)
-
     const position: LatLng = {
-      lat: origin.lat + latOffset,
-      lng: origin.lng + lngOffset,
+      lat: (cy + rand()) * CELL_DEG,
+      lng: (cx + rand()) * CELL_DEG,
     }
 
     const type = pick<ParkingType>(
@@ -150,7 +157,7 @@ export function generateParkingSpots(
             : `${pick(rand, OPERATORS)} - ${place}`
 
     spots.push({
-      id: `spot-${i}-${Math.round(position.lat * 1e5)}-${Math.round(position.lng * 1e5)}`,
+      id: `spot-${cx}-${cy}-${i}`,
       name,
       operator: pick(rand, OPERATORS),
       type,
@@ -164,8 +171,49 @@ export function generateParkingSpots(
       hasDisabledBays: rand() > 0.5,
       rating: Math.round((3 + rand() * 2) * 10) / 10,
       restrictions: pick(rand, RESTRICTIONS),
-      distanceKm: distanceKm(origin, position),
     })
+  }
+
+  return spots
+}
+
+function cellRange(bounds: Bounds) {
+  return {
+    x0: Math.floor(bounds.west / CELL_DEG),
+    x1: Math.floor(bounds.east / CELL_DEG),
+    y0: Math.floor(bounds.south / CELL_DEG),
+    y1: Math.floor(bounds.north / CELL_DEG),
+  }
+}
+
+/** True when the viewport covers so much ground that listing spots is useless. */
+export function boundsTooWide(bounds: Bounds): boolean {
+  const { x0, x1, y0, y1 } = cellRange(bounds)
+  return (x1 - x0 + 1) * (y1 - y0 + 1) > MAX_CELLS
+}
+
+/**
+ * All spots in the cells overlapping `bounds`, with distances measured from
+ * `reference` (the user's location or searched address) and nearest first.
+ */
+export function generateSpotsInBounds(
+  bounds: Bounds,
+  reference: LatLng
+): ParkingSpot[] {
+  if (boundsTooWide(bounds)) return []
+
+  const { x0, x1, y0, y1 } = cellRange(bounds)
+  const spots: ParkingSpot[] = []
+
+  for (let cy = y0; cy <= y1; cy++) {
+    for (let cx = x0; cx <= x1; cx++) {
+      for (const seed of spotsForCell(cx, cy)) {
+        spots.push({
+          ...seed,
+          distanceKm: distanceKm(reference, seed.position),
+        })
+      }
+    }
   }
 
   return spots.sort((a, b) => a.distanceKm - b.distanceKm)
