@@ -1,10 +1,15 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import 'leaflet/dist/leaflet.css'
 import type { LatLng } from '@/lib/geo'
-import { formatDistance, googleMapsDirectionsUrl, walkingMinutes } from '@/lib/geo'
+import {
+  distanceKm,
+  formatDistance,
+  googleMapsDirectionsUrl,
+  walkingMinutes,
+} from '@/lib/geo'
 import {
   availabilityLevel,
   boundsTooWide,
@@ -39,7 +44,18 @@ const AVAILABILITY_STYLES: Record<string, string> = {
 const DURATIONS = [1, 2, 4, 8, 24]
 
 export default function ParkingFinderPage() {
-  const [origin, setOrigin] = useState<LatLng | null>(null)
+  // Where the user physically is (the blue dot) and where they're *looking*.
+  // Panning moves the latter only, so the map centre acts as the current
+  // address: results and distances follow the view.
+  const [userLocation, setUserLocation] = useState<LatLng | null>(null)
+  const [centre, setCentre] = useState<LatLng | null>(null)
+  const [placeName, setPlaceName] = useState<string | null>(null)
+  // Bumping the token recentres the map; panning must not, or it would fight
+  // the drag and loop.
+  const [flyTarget, setFlyTarget] = useState<{
+    position: LatLng
+    token: number
+  } | null>(null)
   const [locating, setLocating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -56,13 +72,27 @@ export default function ParkingFinderPage() {
   // Narrow screens can only fit one pane at a time; both show side by side at md+.
   const [mobileView, setMobileView] = useState<'map' | 'list'>('map')
 
-  // Spots come from whatever the map is currently showing, so panning to a new
-  // area loads that area's parking instead of keeping the original search.
+  // Spots come from whatever the map is currently showing, measured from the
+  // centre of that view, so panning to a new area loads and re-ranks that
+  // area's parking instead of keeping the original search.
   const spots = useMemo(
-    () => (origin && bounds ? generateSpotsInBounds(bounds, origin) : []),
-    [origin, bounds]
+    () => (centre && bounds ? generateSpotsInBounds(bounds, centre) : []),
+    [centre, bounds]
   )
   const zoomedOutTooFar = bounds ? boundsTooWide(bounds) : false
+
+  const handleBoundsChange = useCallback((next: Bounds) => {
+    setBounds(next)
+    setCentre({
+      lat: (next.north + next.south) / 2,
+      lng: (next.east + next.west) / 2,
+    })
+  }, [])
+
+  const goTo = useCallback((position: LatLng) => {
+    setCentre(position)
+    setFlyTarget({ position, token: Date.now() })
+  }, [])
 
   const useMyLocation = useCallback(() => {
     setError(null)
@@ -73,7 +103,9 @@ export default function ParkingFinderPage() {
     setLocating(true)
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setOrigin({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+        const here = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+        setUserLocation(here)
+        goTo(here)
         setLocating(false)
       },
       (err) => {
@@ -86,7 +118,48 @@ export default function ParkingFinderPage() {
       },
       { enableHighAccuracy: true, timeout: 10000 }
     )
-  }, [])
+  }, [goTo])
+
+  // Name the area under the map centre. Debounced and distance-gated so a drag
+  // produces one lookup, not one per frame; the label is a nicety, so a failed
+  // or blocked request just leaves the previous name in place.
+  const lastNamed = useRef<LatLng | null>(null)
+  useEffect(() => {
+    if (!centre) return
+    if (lastNamed.current && distanceKm(lastNamed.current, centre) < 0.15) return
+
+    const controller = new AbortController()
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&zoom=16&lat=${centre.lat}&lon=${centre.lng}`,
+          { signal: controller.signal }
+        )
+        const data = await res.json()
+        const a = data?.address ?? {}
+        const name =
+          a.neighbourhood ??
+          a.suburb ??
+          a.village ??
+          a.town ??
+          a.city_district ??
+          a.city ??
+          data?.name ??
+          null
+        if (name) {
+          lastNamed.current = centre
+          setPlaceName(name)
+        }
+      } catch {
+        // Offline or rate-limited: keep whatever label we already have.
+      }
+    }, 700)
+
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [centre])
 
   const searchAddress = useCallback(
     async (e?: React.FormEvent) => {
@@ -105,14 +178,17 @@ export default function ParkingFinderPage() {
           setError(`No location found for "${query}".`)
           return
         }
-        setOrigin({ lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) })
+        goTo({
+          lat: parseFloat(results[0].lat),
+          lng: parseFloat(results[0].lon),
+        })
       } catch {
         setError('Address lookup failed. Please try again.')
       } finally {
         setSearching(false)
       }
     },
-    [query]
+    [query, goTo]
   )
 
   const toggleType = (type: ParkingType) => {
@@ -140,7 +216,7 @@ export default function ParkingFinderPage() {
 
   const selectedSpot = spots.find((s) => s.id === selectedId) ?? null
 
-  if (!origin) {
+  if (!centre) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-gray-50 px-4 text-center">
         <div className="max-w-md space-y-2">
@@ -240,6 +316,16 @@ export default function ParkingFinderPage() {
       {error && (
         <div className="bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
       )}
+
+      <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 py-2 text-sm">
+        <span aria-hidden>📍</span>
+        <span className="truncate font-medium text-gray-900">
+          {placeName ?? 'Searching this area'}
+        </span>
+        <span className="ml-auto whitespace-nowrap text-xs text-gray-500">
+          {zoomedOutTooFar ? '—' : `${filteredSpots.length} nearby`}
+        </span>
+      </div>
 
       <div className="flex min-h-0 flex-1">
         <aside
@@ -356,19 +442,25 @@ export default function ParkingFinderPage() {
           } relative flex-1 md:block`}
         >
           <ParkingMap
-            origin={origin}
+            centre={centre}
+            userLocation={userLocation}
+            flyTarget={flyTarget}
             spots={filteredSpots}
             selectedId={selectedId}
             onSelect={setSelectedId}
-            onBoundsChange={setBounds}
+            onBoundsChange={handleBoundsChange}
           />
-          <div className="pointer-events-none absolute bottom-4 left-1/2 z-[1000] -translate-x-1/2">
-            <span className="rounded-full bg-white/95 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md">
-              {zoomedOutTooFar
-                ? 'Zoom in to see parking'
-                : `${filteredSpots.length} spaces in view`}
-            </span>
+          {/* Crosshair: the centre is the search point, so it needs to be visible. */}
+          <div className="pointer-events-none absolute left-1/2 top-1/2 z-[1000] -translate-x-1/2 -translate-y-1/2">
+            <div className="h-5 w-5 rounded-full border-2 border-gray-700/70 bg-white/40 shadow-sm" />
           </div>
+          {zoomedOutTooFar && (
+            <div className="pointer-events-none absolute bottom-4 left-1/2 z-[1000] -translate-x-1/2">
+              <span className="rounded-full bg-white/95 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md">
+                Zoom in to see parking
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

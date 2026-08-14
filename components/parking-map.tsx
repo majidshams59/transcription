@@ -66,11 +66,24 @@ function originIcon() {
   })
 }
 
-function Recenter({ position }: { position: LatLng }) {
+/**
+ * Recentres only when the token changes, i.e. on an explicit "my location" or
+ * address search. Reacting to the centre itself would fight the user's pan,
+ * since panning is what moves the centre.
+ */
+function Recenter({
+  target,
+}: {
+  target: { position: LatLng; token: number } | null
+}) {
   const map = useMap()
+  const token = target?.token
+  const position = target?.position
   useEffect(() => {
+    if (!position) return
     map.flyTo([position.lat, position.lng], map.getZoom(), { duration: 0.6 })
-  }, [position.lat, position.lng, map])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, map])
   return null
 }
 
@@ -140,7 +153,9 @@ function PanToSelected({ spot }: { spot: ParkingSpot | null }) {
 }
 
 interface ParkingMapProps {
-  origin: LatLng
+  centre: LatLng
+  userLocation: LatLng | null
+  flyTarget: { position: LatLng; token: number } | null
   spots: ParkingSpot[]
   selectedId: string | null
   onSelect: (id: string) => void
@@ -148,7 +163,9 @@ interface ParkingMapProps {
 }
 
 export default function ParkingMap({
-  origin,
+  centre,
+  userLocation,
+  flyTarget,
   spots,
   selectedId,
   onSelect,
@@ -156,7 +173,7 @@ export default function ParkingMap({
 }: ParkingMapProps) {
   return (
     <MapContainer
-      center={[origin.lat, origin.lng]}
+      center={[centre.lat, centre.lng]}
       zoom={15}
       scrollWheelZoom
       style={{ height: '100%', width: '100%' }}
@@ -165,13 +182,18 @@ export default function ParkingMap({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-      <Recenter position={origin} />
+      <Recenter target={flyTarget} />
       <BoundsReporter onBoundsChange={onBoundsChange} />
       <ResizeHandler />
       <PanToSelected spot={spots.find((s) => s.id === selectedId) ?? null} />
-      <Marker position={[origin.lat, origin.lng]} icon={originIcon()}>
-        <Popup>You are here</Popup>
-      </Marker>
+      {userLocation && (
+        <Marker
+          position={[userLocation.lat, userLocation.lng]}
+          icon={originIcon()}
+        >
+          <Popup>You are here</Popup>
+        </Marker>
+      )}
       {spots.map((spot) => (
         <Marker
           key={spot.id}
