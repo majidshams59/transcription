@@ -384,7 +384,7 @@ function SpotDetail({ spot, onClose }: { spot: ParkingSpot; onClose: () => void 
           <div>
             <dt className="text-gray-500">Max stay</dt>
             <dd className="font-medium text-gray-900">
-              {spot.maxStayHours >= 24 ? '24 hours' : `${spot.maxStayHours} hours`}
+              {spot.maxStayHours === 1 ? '1 hour' : `${spot.maxStayHours} hours`}
             </dd>
           </div>
           <div className="col-span-2">
