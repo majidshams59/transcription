@@ -52,3 +52,25 @@ settings → network policy), and the automation can verify each advert directly
 
 With `api.adzuna.com` alone (free key from developer.adzuna.com), every daily result
 could be a confirmed-live advert with an exact posting date.
+
+## Genetec and enterprise VMS (added at user request)
+
+Genetec roles are typically network-heavy and pay above the general CCTV-engineer band,
+so they are worth a separate weekly sweep.
+
+| Site | Live search |
+|---|---|
+| Indeed UK — Genetec | https://uk.indeed.com/jobs?q=Genetec&fromage=7&sort=date |
+| Indeed UK — Genetec CCTV | https://uk.indeed.com/jobs?q=Genetec+CCTV+engineer&fromage=7&sort=date |
+| Reed — Genetec | https://www.reed.co.uk/jobs/genetec-jobs?salaryfrom=40000&datecreatedoffset=LastWeek&sortby=DisplayDate |
+| CV-Library — Genetec | https://www.cv-library.co.uk/genetec-jobs?posted=7&salarymin=40000&order=posted |
+| Totaljobs — Genetec | https://www.totaljobs.com/jobs/genetec?postedwithin=7&salaryfrom=40000&sortby=date |
+| LinkedIn — Genetec | https://uk.linkedin.com/jobs/search?keywords=Genetec&location=United%20Kingdom&f_TPR=r604800&sortBy=DD |
+| Professional Security Magazine | https://professionalsecurity.co.uk/?s=Genetec |
+| Indeed UK — Milestone VMS | https://uk.indeed.com/jobs?q=Milestone+XProtect+CCTV&fromage=7&sort=date |
+
+Note on the CV: Genetec is not currently listed on the CV (the VMS line reads Milestone,
+iVMS-4200, DSS, Avigilon). Application letters for Genetec roles therefore position the
+experience as transferable from equivalent enterprise VMS platforms at 1050+ camera scale,
+rather than claiming Genetec itself. If there is real Genetec exposure, adding it to the CV
+would materially strengthen these applications.
