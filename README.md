@@ -1,5 +1,26 @@
 This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
 
+## ParkFinder (`/parking`)
+
+A parking finder: car parks and on-street bays on a map, with tariffs where
+they're known.
+
+**Data comes from OpenStreetMap** via the [Overpass API](https://overpass-api.de/),
+queried for the visible map area. Geocoding and reverse geocoding use
+[Nominatim](https://nominatim.openstreetmap.org/). No API keys needed, but both
+are shared public services — requests are debounced, superseded ones aborted,
+and each response covers a padded area so small pans reuse what's loaded. If
+this ever sees real traffic, move to a self-hosted Overpass instance or a
+commercial provider; the public endpoints are not for production load.
+
+**Coverage is uneven, by design of the source.** OSM records parking locations
+well and prices poorly, so many spots show "Price not recorded" rather than a
+tariff. The UI states that plainly instead of guessing. Real-time space
+availability isn't in OSM at all, so it isn't shown.
+
+Panning or zooming reloads the area, and the map centre acts as the current
+search location, so distances and ordering follow the view.
+
 ## Getting Started
 
 First, run the development server:

@@ -12,18 +12,12 @@ import {
 import L from 'leaflet'
 import type { LatLng } from '@/lib/geo'
 import {
-  availabilityLevel,
+  FEE_LABELS,
+  FEE_MARKER_COLOR,
   typeLabel,
   type Bounds,
   type ParkingSpot,
 } from '@/lib/parking-data'
-
-const AVAILABILITY_COLOR: Record<string, string> = {
-  high: '#16a34a',
-  medium: '#d97706',
-  low: '#dc2626',
-  full: '#6b7280',
-}
 
 // AppyParking-style pin: a badge sitting on a stem that comes to a point.
 // The point (not the badge) is what's anchored to the spot's lat/lng, so it's
@@ -198,18 +192,15 @@ export default function ParkingMap({
         <Marker
           key={spot.id}
           position={[spot.position.lat, spot.position.lng]}
-          icon={markerIcon(
-            AVAILABILITY_COLOR[availabilityLevel(spot)],
-            spot.id === selectedId
-          )}
+          icon={markerIcon(FEE_MARKER_COLOR[spot.fee], spot.id === selectedId)}
           eventHandlers={{ click: () => onSelect(spot.id) }}
         >
           <Popup>
             <div style={{ minWidth: 160 }}>
               <strong>{spot.name}</strong>
               <div>{typeLabel(spot.type)}</div>
-              <div>£{spot.pricePerHour.toFixed(2)} / hour</div>
-              <div>{spot.availableSpaces} of {spot.totalSpaces} free</div>
+              <div>{spot.charge ?? FEE_LABELS[spot.fee]}</div>
+              {spot.capacity != null && <div>{spot.capacity} spaces</div>}
             </div>
           </Popup>
         </Marker>

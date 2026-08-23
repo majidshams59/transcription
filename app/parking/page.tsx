@@ -11,15 +11,17 @@ import {
   walkingMinutes,
 } from '@/lib/geo'
 import {
-  availabilityLevel,
   boundsTooWide,
-  estimateCost,
-  generateSpotsInBounds,
+  FEE_LABELS,
+  FEE_MARKER_COLOR,
   typeLabel,
+  withDistances,
   type Bounds,
+  type FeeStatus,
   type ParkingSpot,
   type ParkingType,
 } from '@/lib/parking-data'
+import { useParking } from '@/lib/use-parking'
 
 const ParkingMap = dynamic(() => import('@/components/parking-map'), {
   ssr: false,
@@ -30,18 +32,16 @@ const ParkingMap = dynamic(() => import('@/components/parking-map'), {
   ),
 })
 
-type SortKey = 'distance' | 'price' | 'availability'
+type SortKey = 'distance' | 'capacity' | 'price'
 
 const ALL_TYPES: ParkingType[] = ['on-street', 'car-park', 'garage', 'private']
+const ALL_FEES: FeeStatus[] = ['free', 'paid', 'unknown']
 
-const AVAILABILITY_STYLES: Record<string, string> = {
-  high: 'bg-green-100 text-green-800',
-  medium: 'bg-amber-100 text-amber-800',
-  low: 'bg-red-100 text-red-800',
-  full: 'bg-gray-200 text-gray-600',
+const FEE_STYLES: Record<FeeStatus, string> = {
+  free: 'bg-green-100 text-green-800',
+  paid: 'bg-blue-100 text-blue-800',
+  unknown: 'bg-gray-200 text-gray-600',
 }
-
-const DURATIONS = [1, 2, 4, 8, 24]
 
 export default function ParkingFinderPage() {
   // Where the user physically is (the blue dot) and where they're *looking*.
@@ -61,23 +61,27 @@ export default function ParkingFinderPage() {
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
 
-  const [maxPrice, setMaxPrice] = useState(10)
   const [selectedTypes, setSelectedTypes] = useState<Set<ParkingType>>(
     new Set(ALL_TYPES)
   )
-  const [onlyAvailable, setOnlyAvailable] = useState(false)
+  const [selectedFees, setSelectedFees] = useState<Set<FeeStatus>>(
+    new Set(ALL_FEES)
+  )
   const [sortKey, setSortKey] = useState<SortKey>('distance')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [bounds, setBounds] = useState<Bounds | null>(null)
   // Narrow screens can only fit one pane at a time; both show side by side at md+.
   const [mobileView, setMobileView] = useState<'map' | 'list'>('map')
 
-  // Spots come from whatever the map is currently showing, measured from the
-  // centre of that view, so panning to a new area loads and re-ranks that
-  // area's parking instead of keeping the original search.
+  const { spots: loadedSpots, loading, error: loadError } = useParking(
+    bounds,
+    centre
+  )
+
+  // Ranking follows the map centre, so re-rank locally rather than refetching.
   const spots = useMemo(
-    () => (centre && bounds ? generateSpotsInBounds(bounds, centre) : []),
-    [centre, bounds]
+    () => (centre ? withDistances(loadedSpots, centre) : []),
+    [loadedSpots, centre]
   )
   const zoomedOutTooFar = bounds ? boundsTooWide(bounds) : false
 
@@ -97,7 +101,9 @@ export default function ParkingFinderPage() {
   const useMyLocation = useCallback(() => {
     setError(null)
     if (!navigator.geolocation) {
-      setError('Geolocation is not supported in this browser. Try searching an address instead.')
+      setError(
+        'Geolocation is not supported in this browser. Try searching an address instead.'
+      )
       return
     }
     setLocating(true)
@@ -122,14 +128,12 @@ export default function ParkingFinderPage() {
 
   // Name the area under the map centre. Debounced and distance-gated so a drag
   // produces one lookup, not one per frame; the label is a nicety, so a failed
-  // or blocked request just leaves the previous name in place.
+  // or blocked request just leaves coordinates showing.
   const lastNamed = useRef<LatLng | null>(null)
   useEffect(() => {
     if (!centre) return
     if (lastNamed.current && distanceKm(lastNamed.current, centre) < 0.15) return
 
-    // Drop the old name straight away: keeping it while the map has moved
-    // elsewhere is worse than showing coordinates.
     setPlaceName(null)
     lastNamed.current = null
 
@@ -156,7 +160,7 @@ export default function ParkingFinderPage() {
           setPlaceName(name)
         }
       } catch {
-        // Offline or rate-limited: keep whatever label we already have.
+        // Offline or rate-limited: coordinates remain.
       }
     }, 700)
 
@@ -196,28 +200,29 @@ export default function ParkingFinderPage() {
     [query, goTo]
   )
 
-  const toggleType = (type: ParkingType) => {
-    setSelectedTypes((prev) => {
-      const next = new Set(prev)
-      if (next.has(type)) next.delete(type)
-      else next.add(type)
-      return next
-    })
+  const toggle = <T,>(set: Set<T>, value: T): Set<T> => {
+    const next = new Set(set)
+    if (next.has(value)) next.delete(value)
+    else next.add(value)
+    return next
   }
 
   const filteredSpots = useMemo(() => {
-    let list = spots.filter(
-      (s) => selectedTypes.has(s.type) && s.pricePerHour <= maxPrice
+    const list = spots.filter(
+      (s) => selectedTypes.has(s.type) && selectedFees.has(s.fee)
     )
-    if (onlyAvailable) list = list.filter((s) => s.availableSpaces > 0)
-
     const sorted = [...list]
     if (sortKey === 'distance') sorted.sort((a, b) => a.distanceKm - b.distanceKm)
-    if (sortKey === 'price') sorted.sort((a, b) => a.pricePerHour - b.pricePerHour)
-    if (sortKey === 'availability')
-      sorted.sort((a, b) => b.availableSpaces - a.availableSpaces)
+    if (sortKey === 'capacity')
+      sorted.sort((a, b) => (b.capacity ?? -1) - (a.capacity ?? -1))
+    if (sortKey === 'price') {
+      const rank = { free: 0, paid: 1, unknown: 2 }
+      sorted.sort(
+        (a, b) => rank[a.fee] - rank[b.fee] || a.distanceKm - b.distanceKm
+      )
+    }
     return sorted
-  }, [spots, selectedTypes, maxPrice, onlyAvailable, sortKey])
+  }, [spots, selectedTypes, selectedFees, sortKey])
 
   const selectedSpot = spots.find((s) => s.id === selectedId) ?? null
 
@@ -227,8 +232,8 @@ export default function ParkingFinderPage() {
         <div className="max-w-md space-y-2">
           <h1 className="text-3xl font-bold text-gray-900">ParkFinder</h1>
           <p className="text-gray-600">
-            Find nearby parking, compare prices, and check live availability
-            — based on your location.
+            Find nearby parking from OpenStreetMap — car parks, on-street bays,
+            and what they charge where it&apos;s been recorded.
           </p>
         </div>
 
@@ -251,7 +256,7 @@ export default function ParkingFinderPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Enter an address or city"
-            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
           />
           <button
             type="submit"
@@ -281,7 +286,7 @@ export default function ParkingFinderPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search a new location…"
+            placeholder="Search a place…"
             className="min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
           />
           <button
@@ -318,20 +323,23 @@ export default function ParkingFinderPage() {
         </div>
       </header>
 
-      {error && (
-        <div className="bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
+      {(error || loadError) && (
+        <div className="bg-red-50 px-4 py-2 text-sm text-red-700">
+          {error ?? loadError}
+        </div>
       )}
 
       <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 py-2 text-sm">
         <span aria-hidden>📍</span>
-        {/* Falls back to coordinates so the label still tracks the map when
-            reverse geocoding is unavailable — otherwise a blocked lookup makes
-            a working map look frozen. */}
         <span className="truncate font-medium text-gray-900">
           {placeName ?? `${centre.lat.toFixed(4)}, ${centre.lng.toFixed(4)}`}
         </span>
         <span className="ml-auto whitespace-nowrap text-xs text-gray-500">
-          {zoomedOutTooFar ? '—' : `${filteredSpots.length} nearby`}
+          {loading
+            ? 'Loading…'
+            : zoomedOutTooFar
+              ? '—'
+              : `${filteredSpots.length} nearby`}
         </span>
       </div>
 
@@ -346,7 +354,7 @@ export default function ParkingFinderPage() {
               {ALL_TYPES.map((type) => (
                 <button
                   key={type}
-                  onClick={() => toggleType(type)}
+                  onClick={() => setSelectedTypes((p) => toggle(p, type))}
                   className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
                     selectedTypes.has(type)
                       ? 'border-blue-600 bg-blue-50 text-blue-700'
@@ -358,40 +366,29 @@ export default function ParkingFinderPage() {
               ))}
             </div>
 
-            <div>
-              <div className="flex items-center justify-between text-xs text-gray-600">
-                <span>Max price</span>
-                <span>{maxPrice >= 10 ? 'Any' : `£${maxPrice.toFixed(2)}/hr`}</span>
-              </div>
-              <input
-                type="range"
-                min={0.5}
-                max={10}
-                step={0.5}
-                value={maxPrice}
-                onChange={(e) => setMaxPrice(parseFloat(e.target.value))}
-                className="w-full"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 text-xs text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={onlyAvailable}
-                  onChange={(e) => setOnlyAvailable(e.target.checked)}
-                />
-                Available only
-              </label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {ALL_FEES.map((fee) => (
+                <button
+                  key={fee}
+                  onClick={() => setSelectedFees((p) => toggle(p, fee))}
+                  className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                    selectedFees.has(fee)
+                      ? 'border-blue-600 bg-blue-50 text-blue-700'
+                      : 'border-gray-300 text-gray-500'
+                  }`}
+                >
+                  {FEE_LABELS[fee]}
+                </button>
+              ))}
 
               <select
                 value={sortKey}
                 onChange={(e) => setSortKey(e.target.value as SortKey)}
-                className="rounded-md border border-gray-300 px-2 py-1 text-xs"
+                className="ml-auto rounded-md border border-gray-300 px-2 py-1 text-xs"
               >
                 <option value="distance">Sort: Nearest</option>
-                <option value="price">Sort: Cheapest</option>
-                <option value="availability">Sort: Most spaces</option>
+                <option value="price">Sort: Free first</option>
+                <option value="capacity">Sort: Largest</option>
               </select>
             </div>
           </div>
@@ -399,48 +396,52 @@ export default function ParkingFinderPage() {
           <div className="flex-1 overflow-y-auto">
             {zoomedOutTooFar ? (
               <p className="p-4 text-sm text-gray-500">
-                Zoom in to see parking in this area.
+                Zoom in to load parking for this area.
+              </p>
+            ) : loading && filteredSpots.length === 0 ? (
+              <p className="p-4 text-sm text-gray-500">Loading parking…</p>
+            ) : filteredSpots.length === 0 ? (
+              <p className="p-4 text-sm text-gray-500">
+                No parking recorded here matching your filters.
               </p>
             ) : (
-              filteredSpots.length === 0 && (
-                <p className="p-4 text-sm text-gray-500">
-                  No parking matches your filters.
-                </p>
-              )
-            )}
-            {filteredSpots.map((spot) => {
-              const level = availabilityLevel(spot)
-              const active = spot.id === selectedId
-              return (
+              filteredSpots.map((spot) => (
                 <button
                   key={spot.id}
                   onClick={() => setSelectedId(spot.id)}
                   className={`block w-full border-b border-gray-100 p-3 text-left hover:bg-gray-50 ${
-                    active ? 'bg-blue-50' : ''
+                    spot.id === selectedId ? 'bg-blue-50' : ''
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">{spot.name}</p>
-                      <p className="text-xs text-gray-500">{typeLabel(spot.type)}</p>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-gray-900">
+                        {spot.name}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {typeLabel(spot.type)}
+                      </p>
                     </div>
-                    <span className="whitespace-nowrap text-sm font-bold text-gray-900">
-                      £{spot.pricePerHour.toFixed(2)}/hr
+                    <span
+                      className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${FEE_STYLES[spot.fee]}`}
+                    >
+                      {spot.charge ?? FEE_LABELS[spot.fee]}
                     </span>
                   </div>
-                  <div className="mt-2 flex items-center gap-2 text-xs">
-                    <span
-                      className={`rounded-full px-2 py-0.5 font-medium ${AVAILABILITY_STYLES[level]}`}
-                    >
-                      {spot.availableSpaces}/{spot.totalSpaces} free
-                    </span>
-                    <span className="text-gray-500">{formatDistance(spot.distanceKm)} away</span>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                    <span>{formatDistance(spot.distanceKm)} away</span>
                     <span className="text-gray-400">·</span>
-                    <span className="text-gray-500">{walkingMinutes(spot.distanceKm)} min walk</span>
+                    <span>{walkingMinutes(spot.distanceKm)} min walk</span>
+                    {spot.capacity != null && (
+                      <>
+                        <span className="text-gray-400">·</span>
+                        <span>{spot.capacity} spaces</span>
+                      </>
+                    )}
                   </div>
                 </button>
-              )
-            })}
+              ))
+            )}
           </div>
         </aside>
 
@@ -462,31 +463,53 @@ export default function ParkingFinderPage() {
           <div className="pointer-events-none absolute left-1/2 top-1/2 z-[1000] -translate-x-1/2 -translate-y-1/2">
             <div className="h-5 w-5 rounded-full border-2 border-gray-700/70 bg-white/40 shadow-sm" />
           </div>
-          {zoomedOutTooFar && (
-            <div className="pointer-events-none absolute bottom-4 left-1/2 z-[1000] -translate-x-1/2">
-              <span className="rounded-full bg-white/95 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md">
-                Zoom in to see parking
+
+          <div className="pointer-events-none absolute bottom-3 left-1/2 z-[1000] flex -translate-x-1/2 gap-3 rounded-full bg-white/95 px-3 py-1.5 text-xs shadow-md">
+            {zoomedOutTooFar ? (
+              <span className="font-medium text-gray-600">
+                Zoom in to load parking
               </span>
-            </div>
-          )}
+            ) : (
+              ALL_FEES.map((fee) => (
+                <span key={fee} className="flex items-center gap-1 text-gray-600">
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full"
+                    style={{ background: FEE_MARKER_COLOR[fee] }}
+                  />
+                  {FEE_LABELS[fee]}
+                </span>
+              ))
+            )}
+          </div>
         </div>
       </div>
 
       {selectedSpot && (
-        <SpotDetail
-          spot={selectedSpot}
-          onClose={() => setSelectedId(null)}
-        />
+        <SpotDetail spot={selectedSpot} onClose={() => setSelectedId(null)} />
       )}
     </main>
   )
 }
 
-function SpotDetail({ spot, onClose }: { spot: ParkingSpot; onClose: () => void }) {
-  const level = availabilityLevel(spot)
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-gray-500">{label}</dt>
+      <dd className="font-medium text-gray-900">{value}</dd>
+    </div>
+  )
+}
+
+function SpotDetail({
+  spot,
+  onClose,
+}: {
+  spot: ParkingSpot
+  onClose: () => void
+}) {
   return (
     <div
-      className="fixed inset-0 z-20 flex items-end justify-center bg-black/40 sm:items-center"
+      className="fixed inset-0 z-[2000] flex items-end justify-center bg-black/40 sm:items-center"
       onClick={onClose}
     >
       <div
@@ -494,10 +517,11 @@ function SpotDetail({ spot, onClose }: { spot: ParkingSpot; onClose: () => void 
         className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
       >
         <div className="flex items-start justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-lg font-bold text-gray-900">{spot.name}</h2>
             <p className="text-sm text-gray-500">
-              {typeLabel(spot.type)} · Operated by {spot.operator}
+              {typeLabel(spot.type)}
+              {spot.operator ? ` · ${spot.operator}` : ''}
             </p>
           </div>
           <button
@@ -510,18 +534,17 @@ function SpotDetail({ spot, onClose }: { spot: ParkingSpot; onClose: () => void 
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${AVAILABILITY_STYLES[level]}`}>
-            {spot.availableSpaces} of {spot.totalSpaces} spaces free
-          </span>
-          <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-700">
-            ★ {spot.rating.toFixed(1)}
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-medium ${FEE_STYLES[spot.fee]}`}
+          >
+            {FEE_LABELS[spot.fee]}
           </span>
           {spot.hasEvCharging && (
             <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs text-emerald-800">
               ⚡ EV charging
             </span>
           )}
-          {spot.hasDisabledBays && (
+          {spot.disabledBays && (
             <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs text-sky-800">
               ♿ Accessible bays
             </span>
@@ -529,39 +552,42 @@ function SpotDetail({ spot, onClose }: { spot: ParkingSpot; onClose: () => void 
         </div>
 
         <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <dt className="text-gray-500">Distance</dt>
-            <dd className="font-medium text-gray-900">
-              {formatDistance(spot.distanceKm)} ({walkingMinutes(spot.distanceKm)} min walk)
-            </dd>
-          </div>
-          <div>
-            <dt className="text-gray-500">Max stay</dt>
-            <dd className="font-medium text-gray-900">
-              {spot.maxStayHours === 1 ? '1 hour' : `${spot.maxStayHours} hours`}
-            </dd>
-          </div>
-          <div className="col-span-2">
-            <dt className="text-gray-500">Restrictions</dt>
-            <dd className="font-medium text-gray-900">{spot.restrictions}</dd>
-          </div>
+          <Fact
+            label="Distance"
+            value={`${formatDistance(spot.distanceKm)} (${walkingMinutes(
+              spot.distanceKm
+            )} min walk)`}
+          />
+          {spot.capacity != null && (
+            <Fact label="Capacity" value={`${spot.capacity} spaces`} />
+          )}
+          {spot.maxStay && <Fact label="Max stay" value={spot.maxStay} />}
+          {spot.access && <Fact label="Access" value={spot.access} />}
+          {spot.openingHours && (
+            <Fact label="Opening hours" value={spot.openingHours} />
+          )}
         </dl>
 
-        <div className="mt-4">
-          <p className="text-sm font-medium text-gray-700">Estimated cost</p>
-          <div className="mt-1.5 grid grid-cols-5 gap-1.5">
-            {DURATIONS.map((h) => (
-              <div
-                key={h}
-                className="rounded-lg border border-gray-200 p-2 text-center"
-              >
-                <p className="text-[11px] text-gray-500">{h}h</p>
-                <p className="text-sm font-semibold text-gray-900">
-                  £{estimateCost(spot, h).toFixed(2)}
-                </p>
-              </div>
-            ))}
-          </div>
+        <div className="mt-4 rounded-lg bg-gray-50 p-3">
+          <p className="text-sm font-medium text-gray-700">Tariff</p>
+          <p className="mt-1 text-sm text-gray-900">
+            {spot.charge ??
+              (spot.fee === 'free'
+                ? 'Free to park'
+                : spot.fee === 'paid'
+                  ? 'Paid — no tariff recorded in OpenStreetMap'
+                  : 'Not recorded in OpenStreetMap')}
+          </p>
+          {!spot.charge && (
+            <a
+              href={spot.osmUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-block text-xs text-blue-600 underline"
+            >
+              View or add details on OpenStreetMap
+            </a>
+          )}
         </div>
 
         <a
