@@ -1,4 +1,6 @@
-import { type NextRequest } from 'next/server'
+// Calls Speechmatics at request time, so it must not be prerendered at build:
+// doing so fails the build wherever the API is unreachable or the key is unset.
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
   // TODO validate paid user
