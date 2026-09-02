@@ -1,0 +1,395 @@
+{
+  "project": "EchoDrop - British English shadowing game (Android + Soniox)",
+  "features": [
+    {
+      "id": "F1",
+      "name": "Account and cloud sync",
+      "description": "Email/password account. Sentence bank, attempts and progress are stored server-side and synced to the device, so the same bank appears on a second device after login.",
+      "acceptance_criteria": [
+        "POST /api/auth/signup with a new email returns 201 and a token; repeating the same email returns 409.",
+        "POST /api/auth/login with correct credentials returns 200 and a token; wrong password returns 401.",
+        "Any request to an endpoint other than E1/E2 without a valid Authorization bearer token returns 401.",
+        "After importing sentences on device A, GET /api/sentences with device B's token for the same account returns the identical sentence ids and texts.",
+        "GET /api/sentences with account X's token never returns a row whose user_id is not X."
+      ]
+    },
+    {
+      "id": "F2",
+      "name": "Paste-to-bank sentence import",
+      "description": "A screen with one large multi-line text box. The user pastes sentences separated by newlines; the app splits per line, trims whitespace, drops empty lines, deduplicates against the existing bank by normalized text, and adds the rest to a deck.",
+      "acceptance_criteria": [
+        "Pasting a block of N non-empty lines and submitting creates exactly N sentences when none already exist in the bank.",
+        "Lines that are empty or whitespace-only are skipped and never create a sentence.",
+        "Leading and trailing whitespace is stripped from every stored sentence text.",
+        "Re-submitting a block whose lines are already in the bank creates 0 new sentences and the response reports them under skipped_duplicates.",
+        "Deduplication is case-insensitive and punctuation-insensitive: 'Hello there.' and 'hello there' are treated as the same sentence.",
+        "A single line longer than 300 characters is rejected and reported in the response's rejected array without aborting the rest of the import.",
+        "After a successful import the bank screen lists the new sentences without requiring an app restart."
+      ]
+    },
+    {
+      "id": "F3",
+      "name": "British-accent sentence playback",
+      "description": "Each sentence can be played aloud in a British English voice via the Soniox Text-to-Speech API. Generated audio is cached server-side per (sentence, voice, model) and cached again on the device, so a repeat play makes no network call.",
+      "acceptance_criteria": [
+        "POST /api/tts for a sentence returns 200 with an audio asset reference and a duration_ms greater than 0.",
+        "The default voice used is a British-accent voice and is one of Oliver, Arthur, Isla, Victoria.",
+        "Calling POST /api/tts twice for the same sentence_id and voice returns the same audio_id and issues only one upstream Soniox TTS request (verified from the server's upstream-call counter or log).",
+        "After a sentence has been played once, playing it again with the device in airplane mode still produces audio from the device cache.",
+        "The user can change the voice in settings and the next playback uses the newly selected voice."
+      ]
+    },
+    {
+      "id": "F4",
+      "name": "Speak and be scored",
+      "description": "The user taps the microphone and repeats the sentence. Device audio is streamed to the Soniox real-time speech-to-text WebSocket, tokens stream back and are highlighted live against the target sentence. On stop, the final tokens are sent to the backend, which computes the authoritative score.",
+      "acceptance_criteria": [
+        "The app never contains a long-lived Soniox API key: the only Soniox credential it holds is one obtained from POST /api/stt/temp-key, and grepping the built APK for the account API key finds no match.",
+        "POST /api/stt/temp-key returns a key whose expiry is at most 300 seconds in the future.",
+        "Recording without microphone permission shows a permission prompt and does not open a WebSocket.",
+        "While the user speaks, partial tokens appear in the UI within 1000 ms of the corresponding speech, before the user stops recording.",
+        "Words of the target sentence that were recognized are marked matched and words that were not are marked missed, per the scoring alignment.",
+        "POST /api/attempts with a transcript identical to the sentence returns accuracy 1.0 and stars 3.",
+        "POST /api/attempts with an empty transcript returns accuracy 0.0 and stars 0.",
+        "If the WebSocket drops mid-recording, the app shows a retry affordance and no attempt row is created."
+      ]
+    },
+    {
+      "id": "F5",
+      "name": "Scoring, stars and progression",
+      "description": "Deterministic server-side scoring. Reference and hypothesis are normalized (lowercased, punctuation stripped, whitespace collapsed) and aligned word by word. accuracy = matched_words / reference_words. confidence_avg = mean confidence of matched tokens. pace_ratio = spoken_duration_ms / reference_duration_ms. Stars: 3 when accuracy >= 0.95 and confidence_avg >= 0.80; 2 when accuracy >= 0.80; 1 when accuracy >= 0.60; otherwise 0. score = round(700*accuracy + 200*confidence_avg + 100*pace_bonus), where pace_bonus = max(0, 1 - abs(pace_ratio - 1)). A sentence is mastered once it has been scored 3 stars at least twice.",
+      "acceptance_criteria": [
+        "The scoring function is pure and deterministic: the same reference, tokens and durations produce the same score on repeated calls.",
+        "Scoring is case-insensitive and punctuation-insensitive: transcript 'hello there' against reference 'Hello, there!' yields accuracy 1.0.",
+        "accuracy is always between 0.0 and 1.0 inclusive, and stars is always an integer in 0..3, for every input including empty and longer-than-reference transcripts.",
+        "A transcript missing exactly one word out of ten yields accuracy 0.9 and stars 2.",
+        "score is an integer between 0 and 1000 inclusive.",
+        "Only the highest star count a sentence has ever earned is kept in progress.best_stars; a later worse attempt does not lower it.",
+        "GET /api/progress total_stars equals the sum of best_stars across that user's sentences.",
+        "A sentence reaches mastered true only after two attempts of 3 stars, and never before."
+      ]
+    },
+    {
+      "id": "F6",
+      "name": "Cut-the-Rope-styled game presentation",
+      "description": "Visual language borrowed from Cut the Rope: warm cardboard and wood backgrounds, thick rounded shapes, chunky playful display type, a bouncy candy-drop and star-burst animation on a scored attempt, and a level-tile map for the bank. Mechanics stay simple: one sentence per card, listen, repeat, earn up to 3 stars.",
+      "acceptance_criteria": [
+        "Every screen listed in ui_screens renders on a 360x640 dp screen with no clipped or overlapping text and no horizontal scrolling.",
+        "Completing an attempt plays a star-burst animation whose star count equals the stars value returned by POST /api/attempts.",
+        "The home map shows one tile per sentence, and each tile displays that sentence's best_stars as 0 to 3 filled stars.",
+        "All interactive controls are at least 48x48 dp.",
+        "The app has no unstyled default Material surfaces on the play screen: background, card and buttons all use the project's own theme tokens."
+      ]
+    },
+    {
+      "id": "F7",
+      "name": "Offline resilience",
+      "description": "The sentence bank, cached TTS audio and unsent attempts live in a local database. With no network the user can still review and replay previously played sentences; attempts made offline are queued and pushed on reconnect.",
+      "acceptance_criteria": [
+        "With the network disabled, launching the app shows the previously synced sentence bank rather than an error screen.",
+        "An attempt recorded while offline is stored locally and appears on the server after the network returns, without user action.",
+        "A queued attempt is never submitted twice: after a reconnect, the server holds exactly one row per queued attempt (verified by its client-generated idempotency key)."
+      ]
+    },
+    {
+      "id": "F8",
+      "name": "Reproducible Android build in CI",
+      "description": "A GitHub Actions workflow builds the Android app and runs the unit test suites for both the app and the backend on every push, publishing the debug APK as a build artifact.",
+      "acceptance_criteria": [
+        "The workflow runs on ubuntu-24.04 and completes assembleDebug with exit code 0.",
+        "The workflow uploads an .apk file as a downloadable artifact.",
+        "The workflow runs the Android unit tests and the backend test suite, and fails the job if either fails.",
+        "The build requires no Soniox credentials: it succeeds with no Soniox secret configured in the repository."
+      ]
+    }
+  ],
+  "data_models": [
+    {
+      "name": "User",
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "email", "type": "string" },
+        { "name": "password_hash", "type": "string" },
+        { "name": "created_at", "type": "string" }
+      ]
+    },
+    {
+      "name": "Deck",
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "user_id", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "sentence_count", "type": "integer" },
+        { "name": "created_at", "type": "string" }
+      ]
+    },
+    {
+      "name": "Sentence",
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "user_id", "type": "string" },
+        { "name": "deck_id", "type": "string" },
+        { "name": "text", "type": "string" },
+        { "name": "normalized_text", "type": "string" },
+        { "name": "word_count", "type": "integer" },
+        { "name": "created_at", "type": "string" }
+      ]
+    },
+    {
+      "name": "TtsAsset",
+      "fields": [
+        { "name": "audio_id", "type": "string" },
+        { "name": "sentence_id", "type": "string" },
+        { "name": "voice", "type": "string" },
+        { "name": "model", "type": "string" },
+        { "name": "audio_url", "type": "string" },
+        { "name": "audio_format", "type": "string" },
+        { "name": "duration_ms", "type": "integer" },
+        { "name": "created_at", "type": "string" }
+      ]
+    },
+    {
+      "name": "Attempt",
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "idempotency_key", "type": "string" },
+        { "name": "user_id", "type": "string" },
+        { "name": "sentence_id", "type": "string" },
+        { "name": "transcript", "type": "string" },
+        { "name": "accuracy", "type": "number" },
+        { "name": "confidence_avg", "type": "number" },
+        { "name": "pace_ratio", "type": "number" },
+        { "name": "score", "type": "integer" },
+        { "name": "stars", "type": "integer" },
+        { "name": "spoken_duration_ms", "type": "integer" },
+        { "name": "created_at", "type": "string" }
+      ]
+    },
+    {
+      "name": "WordResult",
+      "fields": [
+        { "name": "index", "type": "integer" },
+        { "name": "reference_word", "type": "string" },
+        { "name": "heard_word", "type": "string" },
+        { "name": "status", "type": "string" },
+        { "name": "confidence", "type": "number" }
+      ]
+    },
+    {
+      "name": "SttToken",
+      "fields": [
+        { "name": "text", "type": "string" },
+        { "name": "start_ms", "type": "integer" },
+        { "name": "end_ms", "type": "integer" },
+        { "name": "confidence", "type": "number" },
+        { "name": "is_final", "type": "boolean" }
+      ]
+    },
+    {
+      "name": "SentenceProgress",
+      "fields": [
+        { "name": "sentence_id", "type": "string" },
+        { "name": "user_id", "type": "string" },
+        { "name": "best_stars", "type": "integer" },
+        { "name": "best_score", "type": "integer" },
+        { "name": "attempts_count", "type": "integer" },
+        { "name": "three_star_count", "type": "integer" },
+        { "name": "mastered", "type": "boolean" },
+        { "name": "last_attempt_at", "type": "string" }
+      ]
+    }
+  ],
+  "api_contract": [
+    {
+      "id": "E1",
+      "method": "POST",
+      "path": "/api/auth/signup",
+      "request_schema": { "email": "string", "password": "string" },
+      "response_schema": { "token": "string", "user": { "id": "string", "email": "string", "created_at": "string" } },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E2",
+      "method": "POST",
+      "path": "/api/auth/login",
+      "request_schema": { "email": "string", "password": "string" },
+      "response_schema": { "token": "string", "user": { "id": "string", "email": "string", "created_at": "string" } },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E3",
+      "method": "GET",
+      "path": "/api/me",
+      "request_schema": {},
+      "response_schema": { "user": { "id": "string", "email": "string", "created_at": "string" }, "total_stars": "integer", "streak_days": "integer" },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E4",
+      "method": "GET",
+      "path": "/api/decks",
+      "request_schema": {},
+      "response_schema": { "decks": [{ "id": "string", "user_id": "string", "name": "string", "sentence_count": "integer", "created_at": "string" }] },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E5",
+      "method": "POST",
+      "path": "/api/decks",
+      "request_schema": { "name": "string" },
+      "response_schema": { "deck": { "id": "string", "user_id": "string", "name": "string", "sentence_count": "integer", "created_at": "string" } },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E6",
+      "method": "POST",
+      "path": "/api/sentences/import",
+      "request_schema": { "deck_id": "string", "raw_text": "string" },
+      "response_schema": {
+        "created": [{ "id": "string", "user_id": "string", "deck_id": "string", "text": "string", "normalized_text": "string", "word_count": "integer", "created_at": "string" }],
+        "created_count": "integer",
+        "skipped_duplicates": ["string"],
+        "rejected": [{ "line": "string", "reason": "string" }]
+      },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E7",
+      "method": "GET",
+      "path": "/api/sentences",
+      "request_schema": { "deck_id": "string", "cursor": "string", "limit": "integer" },
+      "response_schema": {
+        "sentences": [{ "id": "string", "user_id": "string", "deck_id": "string", "text": "string", "normalized_text": "string", "word_count": "integer", "created_at": "string" }],
+        "next_cursor": "string"
+      },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E8",
+      "method": "DELETE",
+      "path": "/api/sentences/{sentence_id}",
+      "request_schema": {},
+      "response_schema": { "deleted": "boolean" },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E9",
+      "method": "POST",
+      "path": "/api/tts",
+      "request_schema": { "sentence_id": "string", "voice": "string" },
+      "response_schema": { "audio_id": "string", "sentence_id": "string", "voice": "string", "model": "string", "audio_url": "string", "audio_format": "string", "duration_ms": "integer", "cached": "boolean" },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E10",
+      "method": "POST",
+      "path": "/api/stt/temp-key",
+      "request_schema": {},
+      "response_schema": { "api_key": "string", "expires_at": "string", "websocket_url": "string", "model": "string", "audio_format": "string", "sample_rate": "integer", "num_channels": "integer", "language_hints": ["string"] },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E11",
+      "method": "POST",
+      "path": "/api/attempts",
+      "request_schema": {
+        "idempotency_key": "string",
+        "sentence_id": "string",
+        "spoken_duration_ms": "integer",
+        "tokens": [{ "text": "string", "start_ms": "integer", "end_ms": "integer", "confidence": "number", "is_final": "boolean" }]
+      },
+      "response_schema": {
+        "attempt": { "id": "string", "idempotency_key": "string", "user_id": "string", "sentence_id": "string", "transcript": "string", "accuracy": "number", "confidence_avg": "number", "pace_ratio": "number", "score": "integer", "stars": "integer", "spoken_duration_ms": "integer", "created_at": "string" },
+        "word_results": [{ "index": "integer", "reference_word": "string", "heard_word": "string", "status": "string", "confidence": "number" }],
+        "progress": { "sentence_id": "string", "user_id": "string", "best_stars": "integer", "best_score": "integer", "attempts_count": "integer", "three_star_count": "integer", "mastered": "boolean", "last_attempt_at": "string" }
+      },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E12",
+      "method": "GET",
+      "path": "/api/progress",
+      "request_schema": { "deck_id": "string" },
+      "response_schema": {
+        "total_stars": "integer",
+        "mastered_count": "integer",
+        "items": [{ "sentence_id": "string", "user_id": "string", "best_stars": "integer", "best_score": "integer", "attempts_count": "integer", "three_star_count": "integer", "mastered": "boolean", "last_attempt_at": "string" }]
+      },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    },
+    {
+      "id": "E13",
+      "method": "GET",
+      "path": "/api/voices",
+      "request_schema": {},
+      "response_schema": { "voices": [{ "id": "string", "description": "string", "gender": "string", "accent": "string" }], "default_voice": "string" },
+      "owner": "backend",
+      "consumed_by": ["frontend"]
+    }
+  ],
+  "ui_screens": [
+    {
+      "name": "AuthScreen",
+      "consumes_endpoints": ["E1", "E2"],
+      "fields": ["email", "password", "mode_toggle_signup_or_login", "submit_button", "error_message"]
+    },
+    {
+      "name": "HomeMapScreen",
+      "consumes_endpoints": ["E3", "E4", "E7", "E12"],
+      "fields": ["total_stars", "streak_days", "deck_selector", "sentence_tiles_with_star_counts", "play_button", "open_bank_button", "open_profile_button"]
+    },
+    {
+      "name": "PasteImportScreen",
+      "consumes_endpoints": ["E4", "E5", "E6"],
+      "fields": ["deck_selector", "new_deck_name", "raw_text_multiline_input", "detected_line_count", "import_button", "created_count", "skipped_duplicates_list", "rejected_lines_list"]
+    },
+    {
+      "name": "BankScreen",
+      "consumes_endpoints": ["E7", "E8", "E12"],
+      "fields": ["search_query", "sentence_list", "per_sentence_best_stars", "delete_action", "add_sentences_button"]
+    },
+    {
+      "name": "PlayScreen",
+      "consumes_endpoints": ["E9", "E10", "E11"],
+      "fields": ["sentence_card_text", "listen_button", "playback_progress", "record_button", "recording_level_meter", "live_token_highlights", "stop_button", "connection_status"]
+    },
+    {
+      "name": "ResultScreen",
+      "consumes_endpoints": ["E11"],
+      "fields": ["stars_awarded", "score", "accuracy_percent", "word_results_colored", "heard_transcript", "replay_reference_button", "retry_button", "next_sentence_button"]
+    },
+    {
+      "name": "ProfileScreen",
+      "consumes_endpoints": ["E3", "E12", "E13"],
+      "fields": ["email", "total_stars", "mastered_count", "attempts_over_time", "voice_selector", "sync_status", "logout_button"]
+    }
+  ],
+  "assumptions": [
+    "Platform is a native Android app (Kotlin) plus an HTTP backend; the user chose CI-based APK builds because the local build environment has no Android SDK access.",
+    "The visual reference is Cut the Rope's look and feel only (colors, shapes, typography, star rewards). No rope-cutting physics, no Om Nom character, and no ZeptoLab assets are reproduced; all art is original.",
+    "Soniox is used for both halves of the loop: Text-to-Speech for the British-accent prompt and real-time Speech-to-Text for the learner's repetition. Verified against the official soniox-python SDK.",
+    "The account Soniox API key lives only on the backend. The Android client receives short-lived temporary keys minted via Soniox POST /auth/temporary-api-key with usage_type transcribe_websocket. The TTS path is proxied through the backend rather than given a temporary key, so audio can be cached and billed once per sentence.",
+    "Exact Soniox model identifiers for STT and TTS are read at runtime from the Soniox model-listing endpoints and supplied to the client via E10 and E13, rather than hardcoded, because api.soniox.com was unreachable from the planning environment and could not be verified live.",
+    "Default TTS voice is a British-accent built-in voice; the four British voices seen in the official Soniox OpenAPI document are Oliver, Arthur, Isla and Victoria. The live list is confirmed at runtime through E13.",
+    "Device audio is captured as 16 kHz mono PCM signed 16-bit little-endian and streamed to the Soniox real-time WebSocket in that format.",
+    "Soniox does not expose phoneme-level pronunciation assessment. Scoring is therefore word-alignment accuracy plus recognition confidence plus pace, not a true pronunciation score. If phoneme-level scoring is required, a different vendor must be added.",
+    "Authentication is email plus password with bearer tokens. No third-party OAuth provider was requested.",
+    "The backend is the existing Next.js application in this repository, extended with the endpoints above; the specific database and hosting provider are an implementation choice left to the Backend role.",
+    "Sentences are English. Multi-language decks are out of scope for this spec.",
+    "Audio of the learner's own voice is not stored server-side; only the resulting transcript and scores are.",
+    "Target is phone-sized portrait Android; tablet and landscape layouts are out of scope.",
+    "No monetization, no leaderboard and no social features are in scope."
+  ]
+}
