@@ -1,107 +1,112 @@
-'use client'
+import type { Metadata } from 'next'
+import { LiveCaptions } from '@/components/live-captions'
+import { FaqJsonLd } from '@/components/json-ld'
+import { faqs, features, steps } from '@/lib/content'
+import { siteConfig } from '@/lib/site'
 
-import { TranscriptPanel } from '@/components/transcript-panel'
-import { useRef, useState } from 'react'
-import { RealtimeSession } from 'speechmatics'
+// This file is deliberately a server component. Everything below is in the
+// HTML that search engines receive on the first request; only <LiveCaptions />
+// is shipped as client JavaScript.
+export const metadata: Metadata = {
+  title: `${siteConfig.name} — ${siteConfig.tagline}`,
+  description: siteConfig.description,
+  alternates: { canonical: '/' },
+}
 
 export default function Home() {
-  const [session, setSession] = useState<RealtimeSession | null>(null)
-  const [transcription, setTranscription] = useState<string | null>(null)
-  const tcRef = useRef(transcription)
-  const [translation, setTranslation] = useState<string | null>(null)
-  const tlRef = useRef(translation)
-
-  const listDevices = () => {
-    console.log('clicked')
-    if (!navigator.mediaDevices?.enumerateDevices) {
-      console.log('enumerateDevices() not supported.')
-    } else {
-      // List microphones.
-      navigator.mediaDevices.enumerateDevices().then((devices) => {
-        devices = devices.filter((d) => d.kind === 'audioinput')
-        console.log(devices)
-      })
-    }
-  }
-
-  const stopTranscript = () => session?.stop()
-
-  const startTranscript = async () => {
-    let s: RealtimeSession
-    // create a session with JWT
-    if (!session) {
-      // fetch key
-      const { key_value } = await fetch('/api/key').then((res) => res.json())
-      s = new RealtimeSession({ apiKey: key_value })
-      setSession(s)
-    } else {
-      s = session
-    }
-
-    //add listeners
-    s.addListener('RecognitionStarted', () => {
-      console.log('RecognitionStarted')
-    })
-
-    s.addListener('Error', (error) => {
-      console.log('session error', error)
-    })
-
-    s.addListener('AddTranscript', (message) => {
-      console.log('AddTranscript', message)
-      const updatedT = `${tcRef.current ?? ''} ${message.metadata.transcript}`
-      setTranscription(updatedT)
-    })
-
-    s.addListener('AddTranslation', (message) => {
-      console.log('AddTranslation', message)
-      const updatedT = `${tlRef.current ?? ''} ${message.results.map(
-        (res) => res.content ?? ''
-      )}`
-      setTranslation(updatedT)
-    })
-
-    s.addListener('AddPartialTranscript', (message) => {
-      console.log('AddPartialTranscript', message)
-    })
-
-    s.addListener('EndOfTranscript', () => {
-      console.log('EndOfTranscript')
-    })
-
-    //start session which is an async method
-    s.start({
-      transcription_config: { language: 'en', output_locale: 'en-GB' },
-      translation_config: { target_languages: ['cmn'] },
-    }).then(async () => {
-      //setup audio stream
-      // TODO pull out into state
-      let stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus',
-        audioBitsPerSecond: 16000,
-      })
-
-      mediaRecorder.start(1000)
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          s.sendAudio(event.data)
-        }
-      }
-    })
-  }
-
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between">
-      <button onClick={listDevices}>Select device</button>
-      <button onClick={startTranscript}>START</button>
-      <button onClick={stopTranscript}>STOP</button>
-      <TranscriptPanel
-        transcription={transcription}
-        translation={translation}
-      />
+    <main className="mx-auto flex w-full max-w-5xl flex-col gap-20 px-4 py-16 sm:px-6 lg:px-8">
+      <header className="flex flex-col items-center gap-6 text-center">
+        <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
+          Live captions and real-time translation in your browser
+        </h1>
+        <p className="max-w-2xl text-balance text-lg text-gray-600 dark:text-gray-300 sm:text-xl">
+          {siteConfig.description}
+        </p>
+      </header>
+
+      <section aria-labelledby="try-it" className="flex flex-col gap-6">
+        <h2 id="try-it" className="sr-only">
+          Try it now
+        </h2>
+        <LiveCaptions />
+      </section>
+
+      <section aria-labelledby="features" className="flex flex-col gap-8">
+        <h2
+          id="features"
+          className="text-3xl font-bold tracking-tight sm:text-4xl"
+        >
+          What {siteConfig.name} gives you
+        </h2>
+        <div className="grid gap-6 sm:grid-cols-2">
+          {features.map((feature) => (
+            <article
+              key={feature.title}
+              className="flex flex-col gap-2 rounded-lg border border-gray-200 p-6 dark:border-gray-800"
+            >
+              <h3 className="text-xl font-semibold">{feature.title}</h3>
+              <p className="text-gray-600 dark:text-gray-300">{feature.body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="how-it-works" className="flex flex-col gap-8">
+        <h2
+          id="how-it-works"
+          className="text-3xl font-bold tracking-tight sm:text-4xl"
+        >
+          How it works
+        </h2>
+        <ol className="flex flex-col gap-6">
+          {steps.map((step, index) => (
+            <li key={step.title} className="flex gap-4">
+              <span
+                aria-hidden="true"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-900 text-sm font-semibold text-gray-50 dark:bg-gray-50 dark:text-gray-900"
+              >
+                {index + 1}
+              </span>
+              <div className="flex flex-col gap-1">
+                <h3 className="text-xl font-semibold">{step.title}</h3>
+                <p className="text-gray-600 dark:text-gray-300">{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section aria-labelledby="faq" className="flex flex-col gap-8">
+        <h2 id="faq" className="text-3xl font-bold tracking-tight sm:text-4xl">
+          Frequently asked questions
+        </h2>
+        <div className="flex flex-col gap-4">
+          {faqs.map((faq) => (
+            <details
+              key={faq.question}
+              className="group rounded-lg border border-gray-200 p-6 dark:border-gray-800"
+            >
+              <summary className="cursor-pointer list-none marker:content-['']">
+                {/* A heading inside <summary> is valid HTML and puts every
+                    question into the document outline. */}
+                <h3 className="text-lg font-semibold">{faq.question}</h3>
+              </summary>
+              <p className="mt-3 text-gray-600 dark:text-gray-300">
+                {faq.answer}
+              </p>
+            </details>
+          ))}
+        </div>
+      </section>
+
+      <footer className="border-t border-gray-200 pt-8 text-sm text-gray-500 dark:border-gray-800 dark:text-gray-400">
+        <p>
+          {siteConfig.name} — {siteConfig.shortDescription}
+        </p>
+      </footer>
+
+      <FaqJsonLd />
     </main>
   )
 }
